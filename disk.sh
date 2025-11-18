@@ -273,3 +273,19 @@ echo ""
 print_warning "NEXT STEP: Run ./install.sh to complete installation"
 echo ""
 lsblk -o NAME,SIZE,FSTYPE,LABEL,MOUNTPOINT
+
+# Success message
+print_success "Partitioning complete!"
+
+# Next, offer to auto-run install.sh
+if [ -f "./install.sh" ]; then
+    echo -e "\n${BLUE}[ACTION]${NC} Would you like to run install.sh now? (y/N)"
+    read -r TRIGGER_INSTALL
+    if [[ "$TRIGGER_INSTALL" =~ ^[Yy]$ ]]; then
+        sudo ./install.sh
+    else
+        print_info "You can manually run: sudo ./install.sh"
+    fi
+else
+    print_warning "install.sh not found in current directory. Please run it manually when ready."
+fi
