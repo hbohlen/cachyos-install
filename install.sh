@@ -1,12 +1,12 @@
 #!/bin/bash
 #
-# CachyOS Complete System Installation Script
-# For ASUS ROG Zephyrus M16 GU603ZW with 1TB + 2TB Crucial P310 Plus
-# Includes: Niri, DMS, Claude Code, OpenCode, Zen Browser, Power Profiles
-# Version: 2.0
+# CachyOS System Installation Script (install.sh)
+# For ASUS ROG Zephyrus M16 GU603ZW
+# Installs complete CachyOS base system with Niri, development tools, and WiFi
+# Version: 3.0 (Production Ready)
 #
 
-set -e
+set -euo pipefail
 
 # Colors
 RED='\033[0;31m'
@@ -17,64 +17,130 @@ CYAN='\033[0;36m'
 MAGENTA='\033[0;35m'
 NC='\033[0m'
 
-# Spinner
+# Global variables
+SYSTEM_DRIVE=""
+DEV_DRIVE=""
+USERNAME=""
+UUID_ESP=""
+UUID_SYSTEM=""
+UUID_DEV=""
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+# Cleanup function
+cleanup() {
+    local exit_code=$?
+    if [ $exit_code -ne 0 ]; then
+        echo -e "\n${RED}[ERROR]${NC} Script failed at line $1"
+        echo -e "${YELLOW}[INFO]${NC} Filesystems remain mounted at /mnt for debugging"
+        echo -e "${YELLOW}[INFO]${NC} To clean up: sudo umount -R /mnt"
+    fi
+}
+
+trap 'cleanup $LINENO' ERR
+
+# Print functions
 print_header() {
     clear
     echo -e "${CYAN}"
     echo "╔══════════════════════════════════════════════════════════════╗"
-    echo "║  CachyOS Complete System Installation for Zephyrus M16      ║"
-    echo "║  Optimized for Development & AI Agent Workflows              ║"
+    echo "║  CachyOS System Installation Script v3.0                    ║"
+    echo "║  Complete Base System + Niri + Development Tools + WiFi     ║"
     echo "╚══════════════════════════════════════════════════════════════╝"
-    echo -e "${NC}"
+    echo -e "${NC}\n"
 }
 
-print_step() { echo -e "\n${BLUE}[STEP $1/$2]${NC} $3"; }
+print_step() { echo -e "\n${BLUE}[STEP $1/15]${NC} $2"; }
 print_info() { echo -e "${CYAN}[INFO]${NC} $1"; }
 print_success() { echo -e "${GREEN}[✓]${NC} $1"; }
 print_warning() { echo -e "${YELLOW}[!]${NC} $1"; }
 print_error() { echo -e "${RED}[✗]${NC} $1"; }
 print_progress() { echo -e "${MAGENTA}[▶]${NC} $1"; }
 
-spinner() {
-    local pid=$1
-    local spinstr='⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏'
-    while kill -0 $pid 2>/dev/null; do
-        local temp=${spinstr#?}
-        printf " [%c]" "$spinstr"
-        spinstr=$temp${spinstr%"$temp"}
-        sleep 0.1
-        printf "\b\b\b"
-    done
-    printf "    \b\b\b\b"
-}
-
-# Root check
+# Validate root
 if [ "$EUID" -ne 0 ]; then
-    print_error "Please run as root: sudo $0"
+    print_error "This script must be run as root"
+    echo "Usage: sudo $0"
     exit 1
 fi
 
 print_header
 
-# Load configuration from disk.sh
-if [ ! -f "/tmp/cachyos-config.env" ]; then
-    print_error "Configuration file not found! Run ./disk.sh first"
+# ==================== STEP 1: Load Configuration ====================
+print_step 1 15 "Loading configuration from disk.sh..."
+
+CONFIG_FILE="/tmp/cachyos-disk-config.env"
+
+if [ ! -f "$CONFIG_FILE" ]; then
+    print_error "Configuration file not found: $CONFIG_FILE"
+    print_error "You must run disk.sh first!"
     exit 1
 fi
 
-source "/tmp/cachyos-config.env"
+source "$CONFIG_FILE"
 
-print_info "Loaded configuration:"
-echo "  System Drive: $DRIVE_1TB"
-echo "  Dev Drive:    $DRIVE_2TB"
+# Validate required variables
+for var in SYSTEM_DRIVE DEV_DRIVE USERNAME UUID_ESP UUID_SYSTEM UUID_DEV; do
+    if [ -z "${!var}" ]; then
+        print_error "Missing required variable: $var"
+        exit 1
+    fi
+done
+
+print_success "Configuration loaded"
+echo "  System Drive: $SYSTEM_DRIVE"
+echo "  Dev Drive:    $DEV_DRIVE"
 echo "  Username:     $USERNAME"
+
+# ==================== STEP 2: Verify Mounts ====================
+print_step 2 15 "Verifying filesystems are mounted..."
+
+if ! mountpoint -q /mnt; then
+    print_error "/mnt is not a mount point!"
+    print_error "disk.sh may not have completed successfully"
+    exit 1
+fi
+
+MOUNT_COUNT=$(mount | grep -c "/mnt" || echo "0")
+if [ "$MOUNT_COUNT" -lt 15 ]; then
+    print_error "Insufficient mounts found (expected 17+, found $MOUNT_COUNT)"
+    mount | grep /mnt
+    exit 1
+fi
+
+print_success "All filesystems verified mounted ($MOUNT_COUNT mounts)"
+
+# ==================== STEP 3: Test Internet Connectivity ====================
+print_step 3 15 "Testing internet connectivity..."
+
+if ! ping -c 3 archlinux.org > /dev/null 2>&1; then
+    print_error "No internet connectivity!"
+    print_warning "Please connect to WiFi in the live environment:"
+    print_info "  1. Run: nmtui"
+    print_info "  2. Select 'Activate a connection'"
+    print_info "  3. Connect to your network"
+    print_info "  4. Re-run this script"
+    exit 1
+fi
+
+print_success "Internet connectivity confirmed"
+
+# ==================== STEP 4: Configure Fastest Mirrors ====================
+print_step 4 15 "Configuring fastest package mirrors..."
+
+print_progress "Running reflector to find optimal mirrors..."
+if command -v reflector &> /dev/null; then
+    reflector --country US --age 12 --protocol https --sort rate --save /etc/pacman.d/mirrorlist 2>&1 | tail -5
+    print_success "Mirrors configured"
+else
+    print_warning "Reflector not available, using default mirrors"
+fi
+
+# ==================== STEP 5: Get User Passwords ====================
+print_step 5 15 "User account configuration..."
+
 echo ""
-
-# Interactive input for passwords and settings
-print_step 1 14 "Gathering configuration..."
-
-read -p "Enter hostname (default: zephyrus-cachy): " HOSTNAME
-HOSTNAME=${HOSTNAME:-zephyrus-cachy}
+read -p "Enter hostname (default: zephyrus-cachyos): " HOSTNAME
+HOSTNAME=${HOSTNAME:-zephyrus-cachyos}
 
 read -p "Enter timezone (default: America/Chicago): " TIMEZONE
 TIMEZONE=${TIMEZONE:-America/Chicago}
@@ -85,89 +151,66 @@ read -sp "Confirm root password: " ROOT_PASSWORD_CONFIRM
 echo ""
 
 if [ "$ROOT_PASSWORD" != "$ROOT_PASSWORD_CONFIRM" ]; then
-    print_error "Passwords don't match!"
+    print_error "Root passwords don't match!"
     exit 1
 fi
 
-read -sp "Enter user password for $USERNAME: " USER_PASSWORD
+read -sp "Enter password for user $USERNAME: " USER_PASSWORD
 echo ""
-read -sp "Confirm user password: " USER_PASSWORD_CONFIRM
+read -sp "Confirm password for $USERNAME: " USER_PASSWORD_CONFIRM
 echo ""
 
 if [ "$USER_PASSWORD" != "$USER_PASSWORD_CONFIRM" ]; then
-    print_error "Passwords don't match!"
+    print_error "User passwords don't match!"
     exit 1
 fi
 
-print_success "Configuration gathered"
+print_success "User configuration collected"
 
-# Mount filesystems
-print_step 2 14 "Mounting filesystems..."
+# ==================== STEP 6: Install Base System ====================
+print_step 6 15 "Installing base CachyOS system (this will take 5-10 minutes)..."
 
-print_progress "Unmounting existing mounts..."
-umount -R /mnt 2>/dev/null || true
-
-print_progress "Mounting root filesystem..."
-mount -o subvol=@,compress=zstd:3,noatime "${DRIVE_1TB}p2" /mnt
-
-mkdir -p /mnt/{boot/efi,nix,var/lib/containers,.snapshots}
-mkdir -p /mnt/home/$USERNAME/{dev,.cache,.cargo,.rustup,go,.local/share,.nvm,.bun,.claude}
-
-mount "${DRIVE_1TB}p1" /mnt/boot/efi
-mount -o subvol=@snapshots,compress=zstd:3,noatime "${DRIVE_1TB}p2" /mnt/.snapshots
-mount -o subvol=@home,compress=zstd:3,noatime "${DRIVE_1TB}p2" /mnt/home
-mount -o subvol=@var-log,compress=zstd:3,noatime "${DRIVE_1TB}p2" /mnt/var/log
-mount -o subvol=@tmp,compress=zstd:1,noatime "${DRIVE_1TB}p2" /mnt/tmp
-
-mount -o subvol=@dev,compress=zstd:1,noatime,nodatacow "${DRIVE_2TB}p1" /mnt/home/$USERNAME/dev
-mount -o subvol=@nix,compress=zstd:1,noatime "${DRIVE_2TB}p1" /mnt/nix
-mount -o subvol=@containers,compress=zstd:1,noatime "${DRIVE_2TB}p1" /mnt/var/lib/containers
-mount -o subvol=@cache-dev,compress=zstd:1,noatime "${DRIVE_2TB}p1" /mnt/home/$USERNAME/.cache
-mount -o subvol=@cargo,compress=zstd:1,noatime "${DRIVE_2TB}p1" /mnt/home/$USERNAME/.cargo
-mount -o subvol=@rustup,compress=zstd:1,noatime "${DRIVE_2TB}p1" /mnt/home/$USERNAME/.rustup
-mount -o subvol=@go,compress=zstd:1,noatime "${DRIVE_2TB}p1" /mnt/home/$USERNAME/go
-mount -o subvol=@local-share,compress=zstd:1,noatime "${DRIVE_2TB}p1" /mnt/home/$USERNAME/.local/share
-mount -o subvol=@nvm,compress=zstd:1,noatime "${DRIVE_2TB}p1" /mnt/home/$USERNAME/.nvm
-mount -o subvol=@bun,compress=zstd:1,noatime "${DRIVE_2TB}p1" /mnt/home/$USERNAME/.bun
-mount -o subvol=@claude-cache,compress=zstd:1,noatime "${DRIVE_2TB}p1" /mnt/home/$USERNAME/.claude
-
-print_success "All filesystems mounted"
-
-# Configure mirrors
-print_step 3 14 "Configuring fastest mirrors..."
-print_progress "Running reflector for optimal mirrors..."
-(reflector --country US --age 12 --protocol https --sort rate --save /etc/pacman.d/mirrorlist) &
-spinner $!
-print_success "Mirrors configured"
-
-# Install base system
-print_step 4 14 "Installing base CachyOS system..."
-print_progress "Installing base packages with CachyOS kernel..."
+print_progress "Running pacstrap..."
 
 pacstrap -K /mnt \
-    base base-devel linux-firmware linux-cachyos linux-cachyos-headers \
-    btrfs-progs networkmanager nano vim git wget curl fish \
-    sudo polkit-qt6 mate-polkit xdg-desktop-portal-gnome \
-    wl-clipboard cliphist brightnessctl accountsservice \
-    podman podman-compose docker-compose \
-    go rust rustup nodejs npm python python-pip \
-    chezmoi zed github-cli lazygit \
-    ripgrep fd bat eza zoxide fzf btop htop starship \
-    cachyos-fish-config \
-    2>&1 | grep -E "^Downloading|^Extracting|^Installing" | tail -20
+    base \
+    base-devel \
+    linux-firmware \
+    linux-cachyos \
+    linux-cachyos-headers \
+    btrfs-progs \
+    networkmanager \
+    network-manager-applet \
+    iwd \
+    nano \
+    vim \
+    neovim \
+    git \
+    wget \
+    curl \
+    fish \
+    sudo \
+    2>&1 | grep -E "installing|upgrading" | tail -20
 
 print_success "Base system installed"
 
-# Generate fstab
-print_step 5 14 "Configuring filesystem table..."
-genfstab -U /mnt >> /mnt/etc/fstab
-cp "$FSTAB_FILE" /mnt/etc/fstab.manual-backup
-print_success "fstab generated and backed up"
+# ==================== STEP 7: Generate fstab ====================
+print_step 7 15 "Generating filesystem table..."
 
-# Create chroot configuration script
-print_step 6 14 "Preparing system configuration..."
+genfstab -U /mnt > /mnt/etc/fstab
 
-cat > /mnt/root/setup.sh << 'CHROOT_SETUP'
+# Verify fstab
+if ! grep -q "$UUID_SYSTEM" /mnt/etc/fstab; then
+    print_error "fstab generation failed!"
+    exit 1
+fi
+
+print_success "fstab generated"
+
+# ==================== STEP 8: Configure Base System ====================
+print_step 8 15 "Configuring base system..."
+
+cat > /mnt/root/configure-base.sh << 'CHROOT_BASE'
 #!/bin/bash
 set -e
 
@@ -177,44 +220,70 @@ ROOT_PASSWORD="$3"
 HOSTNAME="$4"
 TIMEZONE="$5"
 
-# Locale and timezone
+# Set timezone
 ln -sf /usr/share/zoneinfo/$TIMEZONE /etc/localtime
 hwclock --systohc
-echo "en_US.UTF-8 UTF-8" >> /etc/locale.gen
+
+# Generate locale
+echo "en_US.UTF-8 UTF-8" > /etc/locale.gen
 locale-gen
 echo "LANG=en_US.UTF-8" > /etc/locale.conf
 
-# Hostname and network
+# Set hostname
 echo "$HOSTNAME" > /etc/hostname
+
+# Configure hosts
 cat > /etc/hosts << EOF
 127.0.0.1   localhost
 ::1         localhost
 127.0.1.1   $HOSTNAME.localdomain $HOSTNAME
 EOF
 
-# Set passwords
+# Set root password
 echo "root:$ROOT_PASSWORD" | chpasswd
-useradd -m -G wheel,storage,power,audio,video -s /bin/bash $USERNAME
+
+# Create user
+useradd -m -G wheel,storage,power,audio,video,input,network -s /bin/fish $USERNAME
 echo "$USERNAME:$USER_PASSWORD" | chpasswd
-echo "%wheel ALL=(ALL:ALL) ALL" >> /etc/sudoers.d/wheel
 
-# Enable services
+# Enable sudo for wheel group
+echo "%wheel ALL=(ALL:ALL) ALL" > /etc/sudoers.d/wheel
+chmod 440 /etc/sudoers.d/wheel
+
+# Enable essential services
 systemctl enable NetworkManager
-systemctl enable fstrim.timer
 systemctl enable systemd-timesyncd
+systemctl enable fstrim.timer
 
-# Configure CachyOS repos
+echo "Base configuration complete"
+CHROOT_BASE
+
+chmod +x /mnt/root/configure-base.sh
+arch-chroot /mnt /root/configure-base.sh "$USERNAME" "$USER_PASSWORD" "$ROOT_PASSWORD" "$HOSTNAME" "$TIMEZONE"
+
+print_success "Base system configured"
+
+# ==================== STEP 9: Add CachyOS Repositories ====================
+print_step 9 15 "Adding CachyOS repositories..."
+
+cat > /mnt/root/add-cachyos-repos.sh << 'CHROOT_REPOS'
+#!/bin/bash
+set -e
+
+# Import CachyOS keys
 pacman-key --recv-keys F3B607488DB35A47 --keyserver keyserver.ubuntu.com 2>/dev/null || true
 pacman-key --lsign-key F3B607488DB35A47 2>/dev/null || true
 
-# Install CachyOS packages
+# Install CachyOS keyring and mirrorlist
 pacman --noconfirm -U \
     'https://mirror.cachyos.org/repo/x86_64/cachyos/cachyos-keyring-20240331-1-any.pkg.tar.zst' \
     'https://mirror.cachyos.org/repo/x86_64/cachyos/cachyos-mirrorlist-18-1-any.pkg.tar.zst' \
-    2>/dev/null || echo "CachyOS keyring already installed"
+    'https://mirror.cachyos.org/repo/x86_64/cachyos/cachyos-v3-mirrorlist-18-1-any.pkg.tar.zst' \
+    2>/dev/null || echo "CachyOS packages already installed"
 
-# Add CachyOS repos to pacman.conf
-grep -q "\[cachyos\]" /etc/pacman.conf || cat >> /etc/pacman.conf << 'REPOS'
+# Add repos to pacman.conf if not present
+if ! grep -q "\[cachyos\]" /etc/pacman.conf; then
+    cat >> /etc/pacman.conf << 'EOF'
 
 # CachyOS repositories
 [cachyos-v3]
@@ -228,21 +297,24 @@ Include = /etc/pacman.d/cachyos-v3-mirrorlist
 
 [cachyos]
 Include = /etc/pacman.d/cachyos-mirrorlist
-REPOS
+EOF
+fi
 
+# Update package databases
 pacman -Syy
 
-CHROOT_SETUP
+echo "CachyOS repositories configured"
+CHROOT_REPOS
 
-chmod +x /mnt/root/setup.sh
-arch-chroot /mnt /root/setup.sh "$USERNAME" "$USER_PASSWORD" "$ROOT_PASSWORD" "$HOSTNAME" "$TIMEZONE"
+chmod +x /mnt/root/add-cachyos-repos.sh
+arch-chroot /mnt /root/add-cachyos-repos.sh
 
-print_success "System configured"
+print_success "CachyOS repositories added"
 
-# Install desktop environment and development tools
-print_step 7 14 "Installing Niri compositor and DMS..."
+# ==================== STEP 10: Install Desktop and Development Tools ====================
+print_step 10 15 "Installing desktop environment and development tools..."
 
-cat > /mnt/root/install-desktop.sh << 'CHROOT_DESKTOP'
+cat > /mnt/root/install-packages.sh << 'CHROOT_PACKAGES'
 #!/bin/bash
 set -e
 
@@ -251,127 +323,88 @@ USERNAME="$1"
 # Update system
 pacman -Syu --noconfirm
 
-# Install Niri
-pacman -S --noconfirm niri waybar fuzzel mako alacritty foot swaybg swaylock xdg-desktop-portal-gnome
-
-# Install Ghostty (from AUR via paru)
-su - $USERNAME -c "cd /tmp && git clone https://aur.archlinux.org/paru.git && cd paru && makepkg -si --noconfirm && rm -rf paru" 2>/dev/null || true
-
-# Install additional packages
+# Install Niri and Wayland tools
 pacman -S --noconfirm \
-    qt6-multimedia accountsservice \
-    nix \
-    1password 1password-cli \
-    uv ripgrep fd bat eza zoxide fzf btop htop
+    niri \
+    waybar \
+    fuzzel \
+    mako \
+    alacritty \
+    foot \
+    swaybg \
+    swaylock \
+    wl-clipboard \
+    cliphist \
+    brightnessctl \
+    xdg-desktop-portal-gnome \
+    xdg-desktop-portal-gtk \
+    qt6-wayland \
+    qt5-wayland \
+    polkit-qt6 \
+    mate-polkit \
+    accountsservice \
+    qt6-multimedia
 
-# Install Ghostty via paru as user
-su - $USERNAME -c "paru -S --noconfirm ghostty-bin 2>/dev/null || echo 'Ghostty install optional'" &
+# Install Fish shell configuration
+pacman -S --noconfirm cachyos-fish-config
 
-CHROOT_DESKTOP
+# Install development tools
+pacman -S --noconfirm \
+    podman \
+    podman-compose \
+    podman-docker \
+    docker-compose \
+    go \
+    rust \
+    rustup \
+    nodejs \
+    npm \
+    python \
+    python-pip \
+    uv \
+    chezmoi \
+    zed \
+    github-cli \
+    lazygit \
+    ripgrep \
+    fd \
+    bat \
+    eza \
+    zoxide \
+    fzf \
+    btop \
+    htop \
+    starship \
+    nix
 
-chmod +x /mnt/root/install-desktop.sh
-arch-chroot /mnt /root/install-desktop.sh "$USERNAME"
+# Install system utilities
+pacman -S --noconfirm \
+    thermald \
+    power-profiles-daemon \
+    cpupower
 
-print_success "Desktop environment installed"
+echo "All packages installed"
+CHROOT_PACKAGES
 
-# Install AI tools and browsers
-print_step 8 14 "Installing AI agents and Zen Browser..."
+chmod +x /mnt/root/install-packages.sh
+arch-chroot /mnt /root/install-packages.sh "$USERNAME"
 
-cat > /mnt/root/install-tools.sh << 'CHROOT_TOOLS'
-#!/bin/bash
-set -e
+print_success "Desktop and development tools installed"
 
-USERNAME="$1"
-
-# Install Claude Desktop
-su - $USERNAME -c "
-    cd /tmp
-    wget -q https://storage.googleapis.com/claude-release/claude_installer_latest.tar.gz 2>/dev/null || true
-    tar -xzf claude_installer_latest.tar.gz 2>/dev/null || true
-    ./claude-installer/install.sh 2>/dev/null || echo 'Claude Desktop install optional'
-    rm -rf claude_installer_latest.tar.gz claude-installer
-" &
-
-# Install OpenCode via paru
-su - $USERNAME -c "paru -S --noconfirm opencode-bin" 2>/dev/null || su - $USERNAME -c "paru -S --noconfirm opencode" &
-
-# Install Zen Browser via paru
-su - $USERNAME -c "paru -S --noconfirm zen-browser-bin" 2>/dev/null || su - $USERNAME -c "paru -S --noconfirm zen-browser" &
-
-wait
-
-CHROOT_TOOLS
-
-chmod +x /mnt/root/install-tools.sh
-arch-chroot /mnt /root/install-tools.sh "$USERNAME"
-
-print_success "AI tools and browsers installed"
-
-# Install DMS (Dank Material Shell)
-print_step 9 14 "Installing DMS (Dank Material Shell)..."
-
-cat > /mnt/root/install-dms.sh << 'CHROOT_DMS'
-#!/bin/bash
-set -e
-
-USERNAME="$1"
-
-# DMS installation via paru
-su - $USERNAME -c "
-    paru -S --noconfirm dms-shell-bin 2>/dev/null || \
-    paru -S --noconfirm dms-shell-git 2>/dev/null || \
-    paru -S --noconfirm dms-shell 2>/dev/null || \
-    echo 'DMS shell installation skipped'
-"
-
-# Install DMS dependencies
-su - $USERNAME -c "paru -S --noconfirm matugen-bin dgop" 2>/dev/null || true
-
-CHROOT_DMS
-
-chmod +x /mnt/root/install-dms.sh
-arch-chroot /mnt /root/install-dms.sh "$USERNAME"
-
-print_success "DMS installed"
-
-# Install bootloader
-print_step 10 14 "Installing bootloader..."
-
-arch-chroot /mnt bash << CHROOT_BOOT
-bootctl install
-
-cat > /boot/loader/loader.conf << 'EOF'
-default cachyos.conf
-timeout 3
-console-mode max
-editor no
-EOF
-
-cat > /boot/loader/entries/cachyos.conf << 'EOF'
-title   CachyOS
-linux   /vmlinuz-linux-cachyos
-initrd  /initramfs-linux-cachyos.img
-options root=UUID=$UUID_SYSTEM rootflags=subvol=@ rw quiet splash
-EOF
-
-CHROOT_BOOT
-
-print_success "Bootloader installed"
-
-# Configure Fish shell
-print_step 11 14 "Configuring Fish shell environment..."
+# ==================== STEP 11: Configure Fish Shell ====================
+print_step 11 15 "Configuring Fish shell environment..."
 
 mkdir -p /mnt/home/$USERNAME/.config/fish
 
 cat > /mnt/home/$USERNAME/.config/fish/config.fish << 'FISH_CONFIG'
 # CachyOS Development Environment Configuration
 
-# XDG directories
+# XDG Base Directories
 set -x XDG_CACHE_HOME "$HOME/.cache"
 set -x XDG_DATA_HOME "$HOME/.local/share"
 set -x XDG_CONFIG_HOME "$HOME/.config"
 
-# Development paths (all on P310 Plus)
+# Development paths (all on Crucial P310 Plus)
 set -x CARGO_HOME "$HOME/.cargo"
 set -x RUSTUP_HOME "$HOME/.rustup"
 set -x GOPATH "$HOME/go"
@@ -385,20 +418,21 @@ set -x TERMINAL ghostty
 set -x EDITOR nvim
 set -x VISUAL zed
 
-# PATH
+# PATH additions
 fish_add_path $HOME/.cargo/bin
 fish_add_path $HOME/.local/bin
 fish_add_path $HOME/.bun/bin
 fish_add_path $GOPATH/bin
+fish_add_path $HOME/.nix-profile/bin
 
-# 1Password CLI
-if type -q op
-    op completion fish | source
-end
-
-# Zoxide
+# Zoxide (smart cd)
 if type -q zoxide
     zoxide init fish | source
+end
+
+# Starship prompt
+if type -q starship
+    starship init fish | source
 end
 
 # Development aliases
@@ -411,143 +445,131 @@ alias ls='eza --icons'
 alias ll='eza -l --icons'
 alias la='eza -la --icons'
 alias cat='bat'
+alias vim='nvim'
 
-# Starship prompt
-if type -q starship
-    starship init fish | source
+# Welcome message
+if status is-interactive
+    echo "CachyOS Development Environment Ready"
+    echo "Run 'post-install' to install AUR packages (Ghostty, Claude, OpenCode, Zen Browser, DMS)"
 end
-
 FISH_CONFIG
 
-chown -R $USERNAME:$USERNAME /mnt/home/$USERNAME/.config
+print_success "Fish shell configured"
 
-print_success "Fish configured"
-
-# Configure Niri for DMS
-print_step 12 14 "Configuring Niri for DMS integration..."
+# ==================== STEP 12: Configure Niri ====================
+print_step 12 15 "Configuring Niri compositor..."
 
 mkdir -p /mnt/home/$USERNAME/.config/niri
 
 cat > /mnt/home/$USERNAME/.config/niri/config.kdl << 'NIRI_CONFIG'
-// Niri configuration for CachyOS + DMS
+// Niri configuration for CachyOS (basic setup for DMS later)
 
 layout {
     gaps 8
     struts {
         left 0
         right 0
-        top 30
+        top 0
         bottom 0
     }
 }
 
 spawn-at-startup "mate-polkit"
-spawn-at-startup "dms" "run"
 spawn-at-startup "bash" "-c" "wl-paste --watch cliphist store"
 
 binds {
-    Mod+Return { spawn "ghostty"; }
-    Mod+T { spawn "ghostty"; }
+    // Terminal
+    Mod+Return { spawn "alacritty"; }
+    Mod+T { spawn "alacritty"; }
+    
+    // Window management
     Mod+Q { close-window; }
     Mod+Alt+Q { quit; }
-
-    // DMS keybindings
-    Mod+Space { spawn "dms" "ipc" "call" "spotlight" "toggle"; }
-    Mod+V { spawn "dms" "ipc" "call" "clipboard" "toggle"; }
-    Mod+M { spawn "dms" "ipc" "call" "processlist" "toggle"; }
-    Mod+N { spawn "dms" "ipc" "call" "notifications" "toggle"; }
-    Mod+C { spawn "dms" "ipc" "call" "control-center" "toggle"; }
-    Mod+Comma { spawn "dms" "ipc" "call" "settings" "toggle"; }
-    Mod+P { spawn "dms" "ipc" "call" "notepad" "toggle"; }
-    Mod+Shift+L { spawn "dms" "ipc" "call" "lock" "lock"; }
-
-    // Media
-    XF86AudioRaiseVolume { spawn "dms" "ipc" "call" "audio" "increment" "3"; }
-    XF86AudioLowerVolume { spawn "dms" "ipc" "call" "audio" "decrement" "3"; }
-    XF86AudioMute { spawn "dms" "ipc" "call" "audio" "mute"; }
-
-    // Brightness
-    XF86MonBrightnessUp { spawn "brightnessctl" "set" "10%+"; }
-    XF86MonBrightnessDown { spawn "brightnessctl" "set" "10%-"; }
-
-    // Window management
+    
+    // Focus
     Mod+Left { focus-column-left; }
     Mod+Right { focus-column-right; }
     Mod+Up { focus-window-up; }
     Mod+Down { focus-window-down; }
+    
+    // Move windows
     Mod+Shift+Left { move-column-left; }
     Mod+Shift+Right { move-column-right; }
     Mod+Shift+Up { move-window-up; }
     Mod+Shift+Down { move-window-down; }
-
+    
     // Workspaces
-    Mod+Home { focus-workspace 1; }
-    Mod+End { focus-workspace 10; }
     Mod+1 { focus-workspace 1; }
     Mod+2 { focus-workspace 2; }
     Mod+3 { focus-workspace 3; }
     Mod+4 { focus-workspace 4; }
     Mod+5 { focus-workspace 5; }
+    
+    // Brightness
+    XF86MonBrightnessUp { spawn "brightnessctl" "set" "10%+"; }
+    XF86MonBrightnessDown { spawn "brightnessctl" "set" "10%-"; }
 }
-
 NIRI_CONFIG
-
-chown -R $USERNAME:$USERNAME /mnt/home/$USERNAME/.config/niri
 
 print_success "Niri configured"
 
-# Configure WiFi
-print_step 13 14 "Configuring WiFi..."
+# ==================== STEP 13: Install Bootloader ====================
+print_step 13 15 "Installing systemd-boot bootloader..."
 
-cat > /mnt/root/setup-wifi.sh << 'CHROOT_WIFI'
+cat > /mnt/root/install-bootloader.sh << CHROOT_BOOT
 #!/bin/bash
+set -e
 
-# Enable NetworkManager
-systemctl enable NetworkManager
-systemctl start NetworkManager
+# Install systemd-boot
+bootctl install
 
-# Create connection helper
-cat > /usr/local/bin/nmconnect << 'NMEOF'
-#!/bin/bash
-nmcli device wifi list
-read -p "Enter network SSID: " SSID
-read -sp "Enter password: " PASS
-nmcli device wifi connect "$SSID" password "$PASS"
-NMEOF
-chmod +x /usr/local/bin/nmconnect
+# Create loader configuration
+cat > /boot/loader/loader.conf << 'EOF'
+default cachyos.conf
+timeout 3
+console-mode max
+editor no
+EOF
 
-CHROOT_WIFI
+# Create CachyOS boot entry
+cat > /boot/loader/entries/cachyos.conf << 'EOF'
+title   CachyOS
+linux   /vmlinuz-linux-cachyos
+initrd  /initramfs-linux-cachyos.img
+options root=UUID=$UUID_SYSTEM rootflags=subvol=@ rw quiet splash loglevel=3
+EOF
 
-chmod +x /mnt/root/setup-wifi.sh
-arch-chroot /mnt /root/setup-wifi.sh
+# Create fallback entry
+cat > /boot/loader/entries/cachyos-fallback.conf << 'EOF'
+title   CachyOS (Fallback)
+linux   /vmlinuz-linux-cachyos
+initrd  /initramfs-linux-cachyos-fallback.img
+options root=UUID=$UUID_SYSTEM rootflags=subvol=@ rw
+EOF
 
-print_success "WiFi configured"
+echo "Bootloader installed"
+CHROOT_BOOT
 
-# Apply kernel optimizations
-print_step 14 14 "Applying kernel performance optimizations..."
+chmod +x /mnt/root/install-bootloader.sh
+arch-chroot /mnt /root/install-bootloader.sh
 
-cat > /mnt/root/kernel-tuning.sh << 'CHROOT_KERNEL'
-#!/bin/bash
+print_success "Bootloader installed"
 
-# Create sysctl configuration for performance
-cat > /etc/sysctl.d/99-cachyos-zephyrus.conf << 'SYSCTL_EOF'
-# CachyOS Kernel Tuning for ASUS ROG Zephyrus M16 GU603ZW
-# Optimized for maximum performance while plugged in
+# ==================== STEP 14: Apply Kernel Optimizations ====================
+print_step 14 15 "Applying kernel performance tuning for Zephyrus M16..."
 
-# ===== CPU Scheduler (SCX) =====
-# Already optimized via CachyOS kernel and scx_bpfland
+cat > /mnt/etc/sysctl.d/99-cachyos-zephyrus.conf << 'SYSCTL_EOF'
+# CachyOS Kernel Tuning for ASUS ROG Zephyrus M16
+# Optimized for development and performance
 
-# ===== Memory Management =====
+# Memory management
 vm.swappiness=10
 vm.vfs_cache_pressure=50
 vm.dirty_ratio=20
 vm.dirty_background_ratio=10
 vm.dirty_writeback_centisecs=100
 
-# ===== I/O Scheduler =====
-# NVMe uses none scheduler by default (optimal)
-
-# ===== Network Tuning =====
+# Network tuning
 net.ipv4.tcp_tw_reuse=1
 net.ipv4.ip_local_port_range=10000 65535
 net.core.rmem_max=134217728
@@ -555,114 +577,171 @@ net.core.wmem_max=134217728
 net.ipv4.tcp_rmem=4096 87380 67108864
 net.ipv4.tcp_wmem=4096 65536 67108864
 
-# ===== File Descriptor Limits =====
+# File descriptor limits
 fs.file-max=2097152
 fs.inotify.max_user_watches=524288
-
 SYSCTL_EOF
 
-sysctl -p /etc/sysctl.d/99-cachyos-zephyrus.conf
-
-# CPU Frequency Scaling - Performance mode (always plugged in)
-echo "performance" | tee /sys/devices/system/cpu/cpu*/cpufreq/scaling_governor > /dev/null
-
-# Disable ZRAM for development (uses more RAM but faster)
-# systemctl mask systemd-zram-setup@zram0.service
-
-# Create power profile hook
-mkdir -p /etc/udev/rules.d
-
-cat > /etc/udev/rules.d/99-nmi-watchdog.rules << 'UDEV_EOF'
-# Disable NMI watchdog for performance
-ACTION=="add", SUBSYSTEM=="module", DEVPATH=="*/nmi_watchdog", RUN+="/bin/sh -c 'echo 0 > /proc/sys/kernel/nmi_watchdog'"
-UDEV_EOF
-
-# Create systemd power profile for plugged in (Performance)
-cat > /etc/systemd/system-generators/gen-power-profiles.sh << 'POWERPROF_EOF'
-#!/bin/bash
-
-# Create performance profile (plugged in)
-cat > /etc/power-profiles-daemon.conf.d/zephyrus-performance.conf << 'PROFEOF'
-[Performance]
-Governor=performance
-EPB=performance
-PROFEOF
-
-# Create power-save profile (battery)
-cat > /etc/power-profiles-daemon.conf.d/zephyrus-powersave.conf << 'PROFEOF2'
-[PowerSaver]
-Governor=powersave
-EPB=balance_power
-EPB=powersave
-PROFEOF2
-
-POWERPROF_EOF
-
-chmod +x /etc/systemd/system-generators/gen-power-profiles.sh
-
-# Install power-profiles-daemon if available
-pacman -S --noconfirm power-profiles-daemon 2>/dev/null || true
-
 # Enable thermald for thermal management
-pacman -S --noconfirm thermald 2>/dev/null || true
-systemctl enable thermald 2>/dev/null || true
+arch-chroot /mnt systemctl enable thermald
 
-CHROOT_KERNEL
-
-chmod +x /mnt/root/kernel-tuning.sh
-arch-chroot /mnt /root/kernel-tuning.sh
+# Enable power-profiles-daemon
+arch-chroot /mnt systemctl enable power-profiles-daemon
 
 print_success "Kernel optimizations applied"
 
-# Set ownership
-print_progress "Setting ownership..."
-chown -R $USERNAME:$USERNAME /mnt/home/$USERNAME
+# ==================== STEP 15: Finalize Installation ====================
+print_step 15 15 "Finalizing installation..."
 
-# Disable COW for dev folder (critical for performance)
-arch-chroot /mnt bash << CHROOT_COW
-chattr +C /home/$USERNAME/dev 2>/dev/null || echo "COW disable will happen after first boot"
-CHROOT_COW
+# Set ownership of home directory
+print_progress "Setting file ownership..."
+arch-chroot /mnt chown -R $USERNAME:$USERNAME /home/$USERNAME
 
-# Cleanup
-rm -f /mnt/root/setup.sh /mnt/root/install-desktop.sh /mnt/root/install-tools.sh /mnt/root/install-dms.sh /mnt/root/setup-wifi.sh /mnt/root/kernel-tuning.sh
+# Disable COW for ~/dev (critical for AI agent performance)
+print_progress "Disabling copy-on-write for ~/dev..."
+chattr +C /mnt/home/$USERNAME/dev 2>/dev/null || print_warning "COW disable may need to be done after reboot"
+
+# Create WiFi helper script
+cat > /mnt/usr/local/bin/wifi-connect << 'WIFI_EOF'
+#!/bin/bash
+echo "Available WiFi networks:"
+nmcli device wifi list
+echo ""
+read -p "Enter network SSID: " SSID
+read -sp "Enter password: " PASS
+echo ""
+nmcli device wifi connect "$SSID" password "$PASS"
+WIFI_EOF
+
+chmod +x /mnt/usr/local/bin/wifi-connect
+
+# Create post-install script for AUR packages
+cat > /mnt/home/$USERNAME/post-install.sh << 'POST_INSTALL_EOF'
+#!/bin/bash
+#
+# Post-Installation Script - Run after first boot
+# Installs AUR packages: paru, Ghostty, Zen Browser, Claude Code, OpenCode, DMS
+#
+
+set -e
+
+echo "╔══════════════════════════════════════════════════════════════╗"
+echo "║  CachyOS Post-Installation - AUR Packages                   ║"
+echo "╚══════════════════════════════════════════════════════════════╝"
+echo ""
+
+# Install paru AUR helper
+echo "[1/6] Installing paru AUR helper..."
+cd /tmp
+git clone https://aur.archlinux.org/paru.git
+cd paru
+makepkg -si --noconfirm
+cd ..
+rm -rf paru
+
+# Install Ghostty terminal
+echo "[2/6] Installing Ghostty terminal..."
+paru -S --noconfirm ghostty-bin || paru -S --noconfirm ghostty
+
+# Install Zen Browser
+echo "[3/6] Installing Zen Browser..."
+paru -S --noconfirm zen-browser-bin || paru -S --noconfirm zen-browser
+
+# Install Claude Desktop
+echo "[4/6] Installing Claude Desktop..."
+cd /tmp
+wget -q https://storage.googleapis.com/claude-release/claude_installer_latest.tar.gz
+tar -xzf claude_installer_latest.tar.gz
+./claude-installer/install.sh
+rm -rf claude_installer_latest.tar.gz claude-installer
+
+# Install OpenCode
+echo "[5/6] Installing OpenCode AI CLI..."
+paru -S --noconfirm opencode-bin || paru -S --noconfirm opencode
+
+# Install DMS (Dank Material Shell)
+echo "[6/6] Installing DMS (Dank Material Shell)..."
+paru -S --noconfirm dms-shell-bin matugen-bin dgop || echo "DMS install may require manual setup"
+
+echo ""
+echo "╔══════════════════════════════════════════════════════════════╗"
+echo "║  Post-Installation Complete!                                 ║"
+echo "╚══════════════════════════════════════════════════════════════╝"
+echo ""
+echo "Next steps:"
+echo "  1. Configure DMS: Press Mod+Comma in Niri"
+echo "  2. Setup 1Password: Install from AUR if needed"
+echo "  3. Setup Nix: sh <(curl -L https://nixos.org/nix/install) --daemon"
+echo "  4. Setup Chezmoi: chezmoi init --apply"
+echo ""
+POST_INSTALL_EOF
+
+chmod +x /mnt/home/$USERNAME/post-install.sh
+arch-chroot /mnt chown $USERNAME:$USERNAME /home/$USERNAME/post-install.sh
+
+# Create convenience command
+cat > /mnt/usr/local/bin/post-install << POST_CMD
+#!/bin/bash
+exec /home/$USERNAME/post-install.sh
+POST_CMD
+
+chmod +x /mnt/usr/local/bin/post-install
+
+# Cleanup chroot scripts
+rm -f /mnt/root/*.sh
 
 # Sync
 sync
 
-print_success "Installation cleanup complete"
+print_success "Installation finalized"
 
+# ==================== Summary and Reboot ====================
 echo ""
 echo -e "${GREEN}╔══════════════════════════════════════════════════════════════╗${NC}"
-echo -e "${GREEN}║           CACHYOS INSTALLATION SUCCESSFUL!                   ║${NC}"
+echo -e "${GREEN}║         CACHYOS INSTALLATION COMPLETED SUCCESSFULLY!         ║${NC}"
 echo -e "${GREEN}╚══════════════════════════════════════════════════════════════╝${NC}"
 echo ""
+
 print_info "Installation Summary:"
 echo "  ✓ Base CachyOS system installed"
-echo "  ✓ Niri compositor configured"
-echo "  ✓ DMS (Dank Material Shell) installed"
-echo "  ✓ Claude Code, OpenCode, Zen Browser installed"
-echo "  ✓ Development tools: Podman, Rust, Go, Node, Python"
-echo "  ✓ Fish shell configured"
+echo "  ✓ CachyOS repositories configured"
+echo "  ✓ Niri compositor installed"
+echo "  ✓ Fish shell configured with dev environment"
+echo "  ✓ Development tools: Podman, Rust, Go, Node, Python/UV"
+echo "  ✓ WiFi configured (NetworkManager enabled)"
+echo "  ✓ systemd-boot bootloader installed"
 echo "  ✓ Kernel optimized for Zephyrus M16"
-echo "  ✓ WiFi configured with NetworkManager"
-echo "  ✓ Power profiles ready (performance/powersave)"
+echo "  ✓ User '$USERNAME' created"
 echo ""
-print_warning "FINAL STEPS:"
+
+print_info "After reboot:"
+echo "  • Connect to WiFi: Run 'wifi-connect' or use 'nmtui'"
+echo "  • Install AUR packages: Run 'post-install'"
+echo "  • Start Niri: Login will auto-start (or run 'niri-session')"
 echo ""
-echo "1. Unmount filesystems:"
-echo "   sudo umount -R /mnt"
+
+print_warning "System is ready to reboot!"
 echo ""
-echo "2. Reboot:"
-echo "   sudo reboot"
-echo ""
-echo "3. After first boot:"
-echo "   • Complete WiFi setup if needed: nmconnect"
-echo "   • Setup Nix: sh <(curl -L https://nixos.org/nix/install) --daemon"
-echo "   • Initialize Chezmoi: chezmoi init --apply"
-echo "   • Configure DMS: Press Mod+Comma"
-echo "   • Verify performance: uname -r && cpupower frequency-info"
-echo ""
-echo "4. Optional: Setup 1Password CLI"
-echo "   op signin && op account add"
-echo ""
-print_success "System ready to boot!"
+
+# Prompt for reboot
+read -p "Reboot now? (Y/n): " REBOOT_NOW
+REBOOT_NOW=${REBOOT_NOW:-Y}
+
+if [[ "$REBOOT_NOW" =~ ^[Yy]$ ]]; then
+    print_info "Unmounting filesystems..."
+    umount -R /mnt
+    
+    print_success "Rebooting in 3 seconds..."
+    sleep 1
+    echo "3..."
+    sleep 1
+    echo "2..."
+    sleep 1
+    echo "1..."
+    
+    reboot
+else
+    print_info "To reboot manually:"
+    echo "  sudo umount -R /mnt"
+    echo "  sudo reboot"
+fi
